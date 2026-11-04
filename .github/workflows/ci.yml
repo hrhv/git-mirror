@@ -47,7 +47,7 @@ jobs:
       - run: npm ci
 
       - name: Lint shell scripts
-        run: shellcheck -s sh install.sh scripts/smoke-test.sh
+        run: shellcheck -s sh install.sh uninstall.sh scripts/smoke-test.sh
 
       - name: Build the linux-x64 binary
         run: npx tsx scripts/build-binaries.ts linux-x64 --gzip
@@ -61,3 +61,8 @@ jobs:
           (cd release && sha256sum -- *.gz > SHA256SUMS)
           GIT_MIRROR_DOWNLOAD_URL="file://$PWD/release" GIT_MIRROR_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
           "$RUNNER_TEMP/bin/git-mirror" --version
+
+      - name: Remove it with uninstall.sh
+        run: |
+          GIT_MIRROR_INSTALL_DIR="$RUNNER_TEMP/bin" sh uninstall.sh
+          test ! -e "$RUNNER_TEMP/bin/git-mirror"

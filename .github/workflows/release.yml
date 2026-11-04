@@ -1,9 +1,9 @@
 # Builds standalone git-mirror binaries for every platform, smoke-tests each one on its own OS/CPU,
-# and attaches them to the GitHub release together with SHA256SUMS and install.sh.
+# and attaches them to the GitHub release together with SHA256SUMS, install.sh and uninstall.sh.
 #
 # Release assets (what install.sh downloads):
 #   git-mirror-{linux-x64,linux-arm64,linux-x64-musl,linux-arm64-musl,darwin-x64,darwin-arm64}.gz
-#   SHA256SUMS, install.sh
+#   SHA256SUMS, install.sh, uninstall.sh
 
 name: Release binaries
 
@@ -106,9 +106,9 @@ jobs:
 
       - name: Add installer and checksums
         run: |
-          cp install.sh release/
+          cp install.sh uninstall.sh release/
           cd release
-          sha256sum git-mirror-*.gz install.sh > SHA256SUMS
+          sha256sum git-mirror-*.gz install.sh uninstall.sh > SHA256SUMS
           cat SHA256SUMS
 
       - name: Upload release assets
