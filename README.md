@@ -5,20 +5,79 @@ Mirror any git repository — every branch, tag and ref — to GitHub, GitLab, G
 Useful for backups, moving off another git host, or keeping a private copy of an upstream project.
 
 ```bash
-npx @hrhv/git-mirror . my-backup
+curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh
+git-mirror . my-backup
 ```
 
 ## Requirements
 
-- Node.js 22.12 or newer
 - [git](https://git-scm.com/downloads)
+- Node.js 22.12 or newer, only if you install through npm. The standalone binary has no other dependencies.
 - For GitHub destinations: the [GitHub CLI](https://cli.github.com), logged in with `gh auth login`.
 - For GitLab or Gitea/Forgejo destinations: an access token in an environment variable (see [Authentication](#authentication)). No extra CLI is needed.
 - For any other destination: nothing beyond git.
 
 ## Install
 
-The package is published to GitHub Packages, so npm needs to know where the `@hrhv` scope lives. Add this to `~/.npmrc` (use a [personal access token](https://github.com/settings/tokens) with the `read:packages` scope):
+### Standalone binary (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh
+```
+
+or, with wget:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh
+```
+
+The installer:
+
+1. Picks the build for your machine: Linux (glibc or musl/Alpine, x64 or arm64), or macOS (Intel or Apple Silicon).
+2. Downloads it from the [latest release](https://github.com/hrhv/git-mirror/releases/latest) and verifies it against `SHA256SUMS`.
+3. Runs it once to make sure it works on this machine, then installs it to `~/.local/bin`, or to `/usr/local/bin` when run as root.
+4. Adds that directory to your `PATH` in your shell profile (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), unless it's already on your `PATH`.
+
+Running it again upgrades to the latest version. You can customise it with environment variables:
+
+| Variable | Effect |
+| -------- | ------ |
+| `GIT_MIRROR_VERSION=v0.2.0` | Install a specific release instead of the latest |
+| `GIT_MIRROR_INSTALL_DIR=/opt/bin` | Install somewhere else |
+| `GIT_MIRROR_NO_MODIFY_PATH=1` | Don't edit any shell profile |
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | GIT_MIRROR_VERSION=v0.2.0 sh
+```
+
+In a Dockerfile:
+
+```dockerfile
+# Debian/Ubuntu
+RUN apt-get update && apt-get install -y git curl && curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh
+# Alpine (the musl build also needs libstdc++ and libgcc; as root the installer adds them itself)
+RUN apk add --no-cache git curl && curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh
+```
+
+You can also download a binary yourself from the [releases page](https://github.com/hrhv/git-mirror/releases). Each one is gzipped, so run `gunzip` on it, `chmod +x` it, and put it on your `PATH`.
+
+#### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/uninstall.sh | sh
+```
+
+Add `sh -s -- --dry-run` in place of `sh` to see what would be removed first. The uninstaller removes:
+
+- the binary, from `$GIT_MIRROR_INSTALL_DIR`, `~/.local/bin`, `/usr/local/bin`, or wherever it is on your `PATH`
+- the `PATH` lines the installer added to your shell profiles. Everything else in those files stays exactly as it was, and a symlinked profile stays a symlink.
+- temporary clones left in `$TMPDIR` by interrupted runs
+
+It verifies that a binary really is this project's before deleting it. It won't touch an npm install of `@hrhv/git-mirror` (it tells you to run `npm uninstall -g @hrhv/git-mirror`), another program that happens to be called `git-mirror`, or git, gh, and your tokens. If the binary is in a directory you can't write to, it prints the `sudo rm` command to run.
+
+### npm
+
+The package is published to GitHub Packages, which needs authentication even for public packages. Tell npm where the `@hrhv` scope lives in `~/.npmrc`, using a [personal access token](https://github.com/settings/tokens) with the `read:packages` scope:
 
 ```ini
 @hrhv:registry=https://npm.pkg.github.com
@@ -35,7 +94,7 @@ npx @hrhv/git-mirror <source> <destination>
 npm install -g @hrhv/git-mirror
 ```
 
-Once installed globally, git also picks it up as a subcommand: `git mirror <source> <destination>`.
+However you install it, git also picks it up as a subcommand: `git mirror <source> <destination>`.
 
 ## Usage
 
@@ -174,13 +233,27 @@ npm run dev -- . my-backup --dry-run   # run from source with tsx
 npm test                               # vitest (unit + integration against real git)
 npm run typecheck
 npm run build                          # bundle to dist/ with tsup
+npm run smoke                          # end-to-end smoke test of the bundle
+
+# Standalone binaries (needs Bun: https://bun.sh)
+npm run build:bin                      # every platform, cross-compiled into dist/bin/
+npm run build:bin -- host              # just this machine
+sh scripts/smoke-test.sh dist/bin/git-mirror-darwin-arm64
 ```
 
 The integration tests run the real `git` binary against throwaway repositories in a temp directory. They replace `gh` and the GitLab/Gitea APIs with fakes, and redirect hosted URLs to local bare repos, so they never touch the network.
 
 ### Releasing
 
-Bump the version in `package.json`, push, and create a GitHub release. The **Publish** workflow publishes the package to GitHub Packages.
+1. Bump the version in `package.json`, and push.
+2. Create a GitHub release whose tag matches the version (`v0.2.0` for `0.2.0`).
+
+Two workflows then run:
+
+- **Publish** publishes the npm package to GitHub Packages.
+- **Release binaries** builds the six binaries, each on its own OS and CPU (using Alpine containers for musl), and smoke-tests every one natively. Only if they all pass does it attach them to the release, along with `SHA256SUMS`, `install.sh` and `uninstall.sh`. A tag that doesn't match `package.json` fails the run.
+
+To attach binaries to an existing release, run **Release binaries** manually with that tag.
 
 ## License
 

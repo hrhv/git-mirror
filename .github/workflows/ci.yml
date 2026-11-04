@@ -26,4 +26,38 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: node dist/index.js --version
+      - name: Smoke test the npm bundle
+        run: npm run smoke
+
+  binary:
+    name: binary + installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - run: npm ci
+
+      - name: Lint shell scripts
+        run: shellcheck -s sh install.sh scripts/smoke-test.sh
+
+      - name: Build the linux-x64 binary
+        run: npx tsx scripts/build-binaries.ts linux-x64 --gzip
+
+      - name: Smoke test the binary
+        run: sh scripts/smoke-test.sh dist/bin/git-mirror-linux-x64
+
+      - name: Install it with install.sh from a local "release"
+        run: |
+          mkdir release && cp dist/bin/git-mirror-linux-x64.gz release/
+          (cd release && sha256sum -- *.gz > SHA256SUMS)
+          GIT_MIRROR_DOWNLOAD_URL="file://$PWD/release" GIT_MIRROR_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/git-mirror" --version
