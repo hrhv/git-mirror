@@ -5,40 +5,50 @@ import { join, resolve } from "node:path";
 import { MirrorError } from "./errors.js";
 import type { Runner } from "./exec.js";
 import { Git } from "./git.js";
-import { GitHub, type Visibility } from "./github.js";
+import { resolveDestination } from "./destination.js";
 import type { Logger } from "./logger.js";
-import {
-  githubUrl,
-  isPathLike,
-  isRemoteUrl,
-  parseDestination,
-  parseGithubUrl,
-  parseSlug,
-  redactUrl,
-  repoNameFromUrl,
-  type Protocol,
-} from "./remote.js";
+import type { Fetch } from "./providers/http.js";
+import { githubHost, type Env, type ProviderName, type Visibility } from "./providers/index.js";
+import { githubUrl, isPathLike, isRemoteUrl, parseHostedUrl, parseSlug, redactUrl, repoNameFromUrl, type Protocol } from "./remote.js";
 
-/** Refs GitHub refuses on push ("deny updating a hidden ref"); stripped unless --keep-pull-refs. */
-export const GITHUB_HIDDEN_REF_PREFIXES = ["refs/pull/"];
+/**
+ * Refs that hosts generate for pull/merge requests and CI. They are not project history, and hosts reject
+ * pushes that include them ("deny updating a hidden ref"), so they are stripped unless --keep-host-refs.
+ */
+export const HOST_REF_PREFIXES = [
+  "refs/pull/", // GitHub, Gitea, Forgejo
+  "refs/merge-requests/", // GitLab
+  "refs/pipelines/",
+  "refs/keep-around/",
+  "refs/environments/",
+];
 
 export interface MirrorOptions {
   source: string;
   destination: string;
-  /** GitHub hostname (github.com or a GitHub Enterprise Server host). */
-  host: string;
+  /** Hosting provider of the destination; detected from well-known hosts when omitted. */
+  provider?: ProviderName;
+  /**
+   * Host for shorthand destinations (`owner/repo`). Without `provider` this is the GitHub (Enterprise)
+   * host; defaults come from GH_HOST / GITLAB_HOST / GITEA_HOST.
+   */
+  host?: string;
+  /** API origin for GitLab/Gitea when it differs from https://<host>. */
+  apiUrl?: string;
   visibility: Visibility;
   description?: string;
-  /** Overrides the protocol from `gh config get git_protocol`. */
+  /** Protocol for URLs built from shorthand; defaults to gh's git_protocol (GitHub) or https (token providers). */
   protocol?: Protocol;
   /** Create the destination repo when missing. */
   create: boolean;
   /** Overwrite a destination that already has refs without asking. */
   force: boolean;
   dryRun: boolean;
-  keepPullRefs: boolean;
+  keepHostRefs: boolean;
   quiet: boolean;
   cwd: string;
+  /** Environment for tokens and default hosts (the CLI passes process.env). */
+  env: Env;
 }
 
 export interface MirrorDeps {
@@ -49,13 +59,16 @@ export interface MirrorDeps {
   makeTempDir?: () => Promise<string>;
   removeDir?: (dir: string) => Promise<void>;
   isDirectory?: (path: string) => boolean;
+  /** HTTP client for the GitLab/Gitea APIs. */
+  fetch?: Fetch;
 }
 
 export interface MirrorResult {
   sourceUrl: string;
   destinationUrl: string;
-  /** owner/repo when the destination is on GitHub. */
+  /** namespace/repo when the destination is on a provider git-mirror manages. */
   slug?: string;
+  provider?: ProviderName;
   created: boolean;
   dryRun: boolean;
 }
@@ -75,64 +88,59 @@ export async function mirror(options: MirrorOptions, deps: MirrorDeps): Promise<
   await git.assertInstalled();
 
   // 1. Work out where we are pushing to.
-  const destination = parseDestination(options.destination, options.host);
-  let github: GitHub | undefined;
-  let slug: string | undefined;
-  let destinationUrl: string;
-  let protocol: Protocol = options.protocol ?? "https";
-
-  if (destination.kind === "github") {
-    github = new GitHub(runner, options.host);
-    await github.assertAuthenticated();
-    protocol = options.protocol ?? (await github.gitProtocol());
-    const owner = destination.owner ?? (await github.currentUser());
-    slug = `${owner}/${destination.repo}`;
-    destinationUrl = destination.url ?? githubUrl(options.host, owner, destination.repo, protocol);
-  } else {
-    // Local paths must be absolute: the push runs from inside the temporary clone.
-    destinationUrl = isRemoteUrl(destination.url) ? destination.url : resolve(options.cwd, destination.url);
-  }
+  const destination = await resolveDestination(options, { runner, logger, fetch: deps.fetch });
+  const destinationUrl = destination.url;
+  const hosted = destination.kind === "hosted" ? destination : undefined;
+  const slug = hosted && `${hosted.namespace}/${hosted.repo}`;
+  const gitConfig = hosted?.gitConfig;
 
   // 2. Work out what we are mirroring.
-  const source = await resolveSource(options.source, { ...options, protocol }, git, isDirectory);
-  if (sameRemote(source.url, destinationUrl, options)) {
+  const ghHost = githubHost(options.env, options.provider ? undefined : options.host);
+  const sourceProtocol = hosted?.provider.name === "github" ? hosted.protocol : (options.protocol ?? "https");
+  const source = await resolveSource(options.source, { cwd: options.cwd, host: ghHost, protocol: sourceProtocol }, git, isDirectory);
+  if (sameRemote(source.url, destinationUrl, options.cwd)) {
     throw new MirrorError("Source and destination are the same repository.");
   }
 
   logger.info(`Mirroring ${redactUrl(source.url)} → ${redactUrl(destinationUrl)}`);
 
-  // Fail on an unreachable, private or empty source before creating anything on GitHub.
+  // Fail on an unreachable, private or empty source before creating anything.
   await git.assertReadableSource(source.url);
 
   // 3. Make sure the destination exists and that we are allowed to overwrite it.
   let created = false;
   let exists = true;
-  if (github && slug) {
-    exists = await github.repoExists(slug);
+  if (hosted && slug) {
+    const { provider } = hosted;
+    const where = `${slug} on ${provider.host}`;
+    exists = await provider.repoExists(hosted.namespace, hosted.repo);
     if (!exists) {
       if (!options.create) {
-        throw new MirrorError(`${slug} does not exist.`, "Remove --no-create to have git-mirror create it.");
+        throw new MirrorError(`${where} does not exist.`, "Remove --no-create to have git-mirror create it.");
       }
       const description = options.description ?? `Mirror of ${source.name}`;
       if (options.dryRun) {
-        logger.info(`Would create ${options.visibility} repository ${slug}.`);
+        logger.info(`Would create ${options.visibility} repository ${where}.`);
       } else {
-        await github.createRepo(slug, options.visibility, description);
-        logger.success(`Created ${options.visibility} repository ${slug}.`);
+        await provider.createRepo(hosted.namespace, hosted.repo, { visibility: options.visibility, description });
+        logger.success(`Created ${options.visibility} repository ${where}.`);
       }
       created = true;
     } else {
-      logger.info(`${slug} already exists.`);
+      logger.info(`${where} already exists.`);
     }
   }
 
-  if (exists && (await git.hasRefs(destinationUrl))) {
+  const missingRepoHint = hosted
+    ? undefined
+    : "If the repository does not exist yet, create it first, or pass --provider gitlab|gitea (with an access token) so git-mirror can create it.";
+  if (exists && (await git.hasRefs(destinationUrl, { gitConfig, hint: missingRepoHint }))) {
     await confirmOverwrite(destinationUrl, options, deps);
   }
 
   if (options.dryRun) {
     logger.info("Dry run: nothing was cloned or pushed.");
-    return { sourceUrl: source.url, destinationUrl, slug, created, dryRun: true };
+    return { sourceUrl: source.url, destinationUrl, slug, provider: hosted?.provider.name, created, dryRun: true };
   }
 
   // 4. Clone as a bare mirror and push every ref.
@@ -142,23 +150,25 @@ export async function mirror(options: MirrorOptions, deps: MirrorDeps): Promise<
     const repoDir = join(workDir, "repo.git");
     await git.cloneMirror(source.url, repoDir);
 
-    if (!options.keepPullRefs) {
-      const removed = await git.deleteRefs(repoDir, GITHUB_HIDDEN_REF_PREFIXES);
-      if (removed > 0) logger.info(`Skipping ${removed} pull request ref(s) (use --keep-pull-refs to push them).`);
+    if (!options.keepHostRefs) {
+      const removed = await git.deleteRefs(repoDir, HOST_REF_PREFIXES);
+      if (removed > 0) {
+        logger.info(`Skipping ${removed} pull/merge request ref(s) created by the source host (use --keep-host-refs to push them).`);
+      }
     }
 
-    await git.pushMirror(repoDir, destinationUrl);
+    await git.pushMirror(repoDir, destinationUrl, gitConfig);
   } finally {
     await removeDir(workDir);
   }
 
   logger.success(`Mirrored ${source.name} to ${slug ?? redactUrl(destinationUrl)}.`);
-  return { sourceUrl: source.url, destinationUrl, slug, created, dryRun: false };
+  return { sourceUrl: source.url, destinationUrl, slug, provider: hosted?.provider.name, created, dryRun: false };
 }
 
 async function resolveSource(
   input: string,
-  options: Pick<MirrorOptions, "cwd" | "host"> & { protocol: Protocol },
+  options: { cwd: string; host: string; protocol: Protocol },
   git: Git,
   isDirectory: (path: string) => boolean,
 ): Promise<ResolvedSource> {
@@ -203,11 +213,11 @@ async function confirmOverwrite(url: string, options: MirrorOptions, deps: Mirro
   if (!(await deps.confirm("Overwrite it?"))) throw new MirrorError("Aborted.");
 }
 
-/** Compares two remotes, treating the SSH and HTTPS URLs of the same GitHub repo as equal. */
-function sameRemote(a: string, b: string, { cwd, host }: Pick<MirrorOptions, "cwd" | "host">): boolean {
+/** Compares two remotes, treating the SSH and HTTPS URLs of the same hosted repo as equal. */
+function sameRemote(a: string, b: string, cwd: string): boolean {
   const normalize = (value: string) => {
-    const github = parseGithubUrl(value, host);
-    if (github) return `github:${github.owner}/${github.repo}`.toLowerCase();
+    const hosted = parseHostedUrl(value);
+    if (hosted) return `${hosted.host}/${hosted.segments.join("/")}`.toLowerCase();
     return (isRemoteUrl(value) ? value : resolve(cwd, value)).replace(/\/+$/, "").replace(/\.git$/, "").toLowerCase();
   };
   return normalize(a) === normalize(b);

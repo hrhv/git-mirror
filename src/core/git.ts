@@ -1,5 +1,6 @@
 import { MirrorError } from "./errors.js";
 import type { Runner } from "./exec.js";
+import type { GitConfig } from "./providers/types.js";
 import { isRemoteUrl, redactUrl } from "./remote.js";
 
 export class Git {
@@ -25,10 +26,11 @@ export class Git {
   }
 
   /** Whether the remote has any refs. Throws when the remote cannot be reached. */
-  async hasRefs(url: string): Promise<boolean> {
-    const result = await this.run("git", ["ls-remote", url]);
+  async hasRefs(url: string, { gitConfig, hint }: { gitConfig?: GitConfig; hint?: string } = {}): Promise<boolean> {
+    const result = await this.run("git", ["ls-remote", url], { gitConfig });
     if (result.code !== 0) {
-      throw new MirrorError(`Cannot read destination ${redactUrl(url)}.`, lastLine(result.stderr));
+      const reason = lastLine(result.stderr);
+      throw new MirrorError(`Cannot read destination ${redactUrl(url)}${reason ? `: ${reason}` : "."}`, hint);
     }
     return result.stdout.trim().length > 0;
   }
@@ -72,9 +74,9 @@ export class Git {
     return refs.length;
   }
 
-  async pushMirror(dir: string, url: string): Promise<void> {
+  async pushMirror(dir: string, url: string, gitConfig?: GitConfig): Promise<void> {
     const args = ["push", "--mirror", ...(this.quiet ? ["--quiet"] : []), url];
-    const result = await this.run("git", args, { cwd: dir, stream: !this.quiet });
+    const result = await this.run("git", args, { cwd: dir, stream: !this.quiet, gitConfig });
     if (result.code !== 0) throw new MirrorError(`Failed to push to ${redactUrl(url)}.`, lastLine(result.stderr));
   }
 }

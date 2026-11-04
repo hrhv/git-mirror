@@ -10,6 +10,24 @@ export interface RunOptions {
   input?: string;
   /** Pass stdout/stderr through to the terminal instead of capturing them. */
   stream?: boolean;
+  /**
+   * git config for this command only, passed via GIT_CONFIG_COUNT/KEY/VALUE env vars (appended to any
+   * already set) so values such as auth headers never show up in the process list.
+   */
+  gitConfig?: Record<string, string>;
+}
+
+/** Appends `config` to the GIT_CONFIG_* entries already present in `env`. */
+export function withGitConfig(env: Record<string, string | undefined>, config: Record<string, string> = {}) {
+  const result = { ...env };
+  let count = Number(result.GIT_CONFIG_COUNT) || 0;
+  for (const [key, value] of Object.entries(config)) {
+    result[`GIT_CONFIG_KEY_${count}`] = key;
+    result[`GIT_CONFIG_VALUE_${count}`] = value;
+    count++;
+  }
+  if (count > 0) result.GIT_CONFIG_COUNT = String(count);
+  return result;
 }
 
 export interface RunResult {
@@ -25,7 +43,7 @@ export const spawnRunner: Runner = (command, args, options = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: withGitConfig({ ...process.env, ...options.env }, options.gitConfig),
       stdio: [options.input === undefined ? "ignore" : "pipe", options.stream ? "inherit" : "pipe", options.stream ? "inherit" : "pipe"],
     });
 

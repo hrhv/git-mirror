@@ -51,9 +51,10 @@ function setup({ gh, git, options, deps }: { gh?: FakeGhState; git?: FakeGitStat
     create: true,
     force: false,
     dryRun: false,
-    keepPullRefs: false,
+    keepHostRefs: false,
     quiet: true,
     cwd: "/work",
+    env: {},
     ...options,
   };
   const fullDeps: MirrorDeps = {
@@ -77,6 +78,7 @@ describe("mirror (GitHub destination)", () => {
       sourceUrl: "https://gitlab.com/team/app.git",
       destinationUrl: "git@github.com:jane/app-backup.git",
       slug: "jane/app-backup",
+      provider: "github",
       created: true,
       dryRun: false,
     });
@@ -85,7 +87,7 @@ describe("mirror (GitHub destination)", () => {
       "--version",
       "ls-remote https://gitlab.com/team/app.git",
       "clone --mirror --quiet https://gitlab.com/team/app.git /tmp/git-mirror-x/repo.git",
-      "for-each-ref --format=%(refname) refs/pull/",
+      "for-each-ref --format=%(refname) refs/pull/ refs/merge-requests/ refs/pipelines/ refs/keep-around/ refs/environments/",
       "push --mirror --quiet git@github.com:jane/app-backup.git",
     ]);
     expect(t.removeDir).toHaveBeenCalledWith("/tmp/git-mirror-x");
@@ -115,7 +117,7 @@ describe("mirror (GitHub destination)", () => {
 
   it("refuses to create the repo when --no-create is given", async () => {
     const t = setup({ options: { create: false } });
-    await expect(t.run()).rejects.toThrow("octocat/app-backup does not exist.");
+    await expect(t.run()).rejects.toThrow("octocat/app-backup on github.com does not exist.");
     expect(t.commands("gh").some((c) => c.startsWith("repo create"))).toBe(false);
   });
 
@@ -133,7 +135,7 @@ describe("mirror (GitHub destination)", () => {
     const updateRef = t.calls.find((call) => call.args[0] === "update-ref");
     expect(updateRef?.options?.input).toBe("delete refs/pull/1/head\ndelete refs/pull/2/merge\n");
 
-    const kept = setup({ git: { pullRefs }, options: { keepPullRefs: true } });
+    const kept = setup({ git: { pullRefs }, options: { keepHostRefs: true } });
     await kept.run();
     expect(kept.commands("git").some((c) => c.startsWith("for-each-ref") || c.startsWith("update-ref"))).toBe(false);
   });
@@ -178,7 +180,7 @@ describe("mirror (dry run)", () => {
     expect(result).toMatchObject({ dryRun: true, created: true });
     expect(t.commands("gh").some((c) => c.startsWith("repo create"))).toBe(false);
     expect(t.commands("git")).toEqual(["--version", "ls-remote https://gitlab.com/team/app.git"]);
-    expect(t.log.text()).toContain("Would create private repository octocat/app-backup.");
+    expect(t.log.text()).toContain("Would create private repository octocat/app-backup on github.com.");
   });
 
   it("warns instead of failing when the destination already has content", async () => {

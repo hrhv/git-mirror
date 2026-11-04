@@ -5,6 +5,8 @@ import { MirrorError } from "../core/errors.js";
 import { spawnRunner, type Runner } from "../core/exec.js";
 import { createConsoleLogger, type Logger } from "../core/logger.js";
 import { mirror, type MirrorDeps, type MirrorOptions } from "../core/mirror.js";
+import type { Fetch } from "../core/providers/http.js";
+import { PROVIDER_NAMES } from "../core/providers/index.js";
 
 export interface CliDeps {
   runner?: Runner;
@@ -14,6 +16,7 @@ export interface CliDeps {
   interactive?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  fetch?: Fetch;
   /** Where commander writes help/usage output. */
   writeOut?: (text: string) => void;
   writeErr?: (text: string) => void;
@@ -21,12 +24,16 @@ export interface CliDeps {
 
 const EXAMPLES = `
 Examples:
-  $ git-mirror . my-backup                         mirror the current repo to <you>/my-backup
+  $ git-mirror . my-backup                         mirror the current repo to <you>/my-backup on GitHub
   $ git-mirror vercel/next.js my-org/next-mirror   mirror a GitHub repo into an organization
   $ git-mirror https://gitlab.com/group/app.git app --public
+  $ git-mirror . team/app --provider gitlab --host gitlab.example.com
+  $ git-mirror . https://gitea.example.com/me/app.git --provider gitea
   $ git-mirror ./app git@bitbucket.org:me/app.git  push to any existing git remote
 
-The destination repo is created (private by default) through the GitHub CLI if it is missing.
+Missing repos are created (private by default): on GitHub through the GitHub CLI (gh), on
+GitLab and Gitea/Forgejo through their API using a token from GITLAB_TOKEN / GITEA_TOKEN
+(or GIT_MIRROR_TOKEN). Other remotes are pushed to as-is and must already exist.
 Mirroring replaces every branch and tag in the destination, so existing repos need --force or confirmation.`;
 
 export function createProgram(deps: CliDeps = {}, onRun: (options: MirrorOptions) => Promise<void>): Command {
@@ -36,8 +43,8 @@ export function createProgram(deps: CliDeps = {}, onRun: (options: MirrorOptions
     .name("git-mirror")
     .description(pkg.description)
     .version(pkg.version, "-v, --version")
-    .argument("<source>", "local path, git URL, or owner/repo on GitHub")
-    .argument("<destination>", "repo or owner/repo on GitHub, or any git remote URL")
+    .argument("<source>", "local path, git URL (https or ssh), or owner/repo on GitHub")
+    .argument("<destination>", "repo, owner/repo (or group/subgroup/repo on GitLab), or any git URL or path")
     .addOption(
       new Option("--visibility <visibility>", "visibility of a newly created repo")
         .choices(["private", "public", "internal"])
@@ -45,17 +52,30 @@ export function createProgram(deps: CliDeps = {}, onRun: (options: MirrorOptions
     )
     .addOption(new Option("--public", "shorthand for --visibility public").implies({ visibility: "public" }))
     .option("-d, --description <text>", 'description for a newly created repo (default: "Mirror of <source>")')
-    .option("--host <hostname>", "GitHub hostname, for GitHub Enterprise Server", env.GH_HOST || "github.com")
     .addOption(
-      new Option("--protocol <protocol>", "protocol for GitHub URLs (default: your `gh` git_protocol setting)").choices([
-        "ssh",
-        "https",
-      ]),
+      new Option("--provider <provider>", "hosting provider of the destination (default: detected from the URL, else github)").choices(
+        PROVIDER_NAMES,
+      ),
+    )
+    .option(
+      "--host <hostname>",
+      "host for shorthand destinations (default: $GH_HOST or github.com; with --provider gitlab: $GITLAB_HOST or gitlab.com; gitea: $GITEA_HOST)",
+    )
+    .option("--api-url <url>", "GitLab/Gitea API origin, when it differs from https://<host> (e.g. http://gitea.local:3000)")
+    .addOption(
+      new Option(
+        "--protocol <protocol>",
+        "protocol for URLs built from shorthand (default: your `gh` git_protocol setting on GitHub, https elsewhere)",
+      ).choices(["ssh", "https"]),
     )
     .option("--no-create", "fail instead of creating a missing destination repo")
     .option("-f, --force", "overwrite a destination that already has content without asking", false)
     .option("-n, --dry-run", "show what would happen without creating or pushing anything", false)
-    .option("--keep-pull-refs", "also push refs/pull/* (GitHub rejects these, so only useful for other hosts)", false)
+    .option(
+      "--keep-host-refs",
+      "also push host-generated refs (refs/pull/*, refs/merge-requests/*, ...); most hosts reject these",
+      false,
+    )
     .option("-q, --quiet", "only print warnings and errors", false)
     .addHelpText("after", EXAMPLES)
     .showHelpAfterError("(run git-mirror --help for usage)")
@@ -68,16 +88,19 @@ export function createProgram(deps: CliDeps = {}, onRun: (options: MirrorOptions
       await onRun({
         source,
         destination,
+        provider: opts.provider,
         host: opts.host,
+        apiUrl: opts.apiUrl,
         visibility: opts.visibility,
         description: opts.description,
         protocol: opts.protocol,
         create: opts.create,
         force: opts.force,
         dryRun: opts.dryRun,
-        keepPullRefs: opts.keepPullRefs,
+        keepHostRefs: opts.keepHostRefs,
         quiet: opts.quiet,
         cwd: deps.cwd ?? process.cwd(),
+        env,
       });
     });
 }
@@ -93,6 +116,7 @@ export async function run(args: string[], deps: CliDeps = {}): Promise<number> {
       runner: deps.runner ?? spawnRunner,
       logger,
       confirm: deps.confirm ?? (interactive ? askYesNo : undefined),
+      fetch: deps.fetch,
     });
   });
 

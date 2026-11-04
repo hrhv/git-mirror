@@ -43,14 +43,43 @@ export function parseSlug(value: string): Slug | undefined {
   return undefined;
 }
 
+export interface HostedUrl {
+  host: string;
+  /** scheme://host[:port] for http(s) URLs; where a web UI and API usually live. */
+  origin?: string;
+  /** Path segments without a trailing .git: `group/sub/app.git` -> ["group", "sub", "app"]. */
+  segments: string[];
+}
+
+/** Splits an https, ssh:// or scp-like git URL into host and path. Undefined for file:// and local paths. */
+export function parseHostedUrl(url: string): HostedUrl | undefined {
+  let host: string;
+  let origin: string | undefined;
+  let path: string;
+
+  const standard = /^(https?|ssh|git):\/\/(?:[^@/]+@)?([^/:]+)(?::(\d+))?\/(.*)$/i.exec(url);
+  const scp = standard ? undefined : /^(?:[^@/:\\\s]+@)?([^@/:\\\s]{2,}):(?!\/\/)(.*)$/.exec(url);
+  if (standard) {
+    const [, scheme, hostname, port, rest] = standard;
+    host = hostname!.toLowerCase();
+    path = rest!;
+    if (/^https?$/i.test(scheme!)) origin = `${scheme!.toLowerCase()}://${host}${port ? `:${port}` : ""}`;
+  } else if (scp) {
+    host = scp[1]!.toLowerCase();
+    path = scp[2]!;
+  } else {
+    return undefined;
+  }
+
+  const segments = path.replace(/\/+$/, "").replace(/\.git$/, "").split("/").filter(Boolean);
+  return segments.length > 0 ? { host, origin, segments } : undefined;
+}
+
 /** Extracts `owner/repo` from a GitHub URL on the given host, if it is one. */
 export function parseGithubUrl(url: string, host: string): Required<Slug> | undefined {
-  const escapedHost = host.replace(/\./g, "\\.");
-  const match =
-    new RegExp(`^(?:https?|ssh)://(?:[^@/]+@)?${escapedHost}(?::\\d+)?/([^/]+)/([^/]+?)(?:\\.git)?/?$`).exec(url) ??
-    new RegExp(`^[\\w.-]+@${escapedHost}:([^/]+)/([^/]+?)(?:\\.git)?/?$`).exec(url);
-  if (!match) return undefined;
-  return { owner: match[1]!, repo: match[2]! };
+  const parsed = parseHostedUrl(url);
+  if (!parsed || parsed.host !== host.toLowerCase() || parsed.segments.length !== 2) return undefined;
+  return { owner: parsed.segments[0]!, repo: parsed.segments[1]! };
 }
 
 /**
@@ -70,28 +99,29 @@ export function githubUrl(host: string, owner: string, repo: string, protocol: P
   return protocol === "ssh" ? `git@${host}:${owner}/${repo}.git` : `https://${host}/${owner}/${repo}.git`;
 }
 
-export type Destination =
-  /** A GitHub repository that git-mirror can look up and create via `gh`. */
-  | { kind: "github"; owner?: string; repo: string; url?: string }
-  /** Any other git remote (another host, a local bare repo). Must already exist. */
-  | { kind: "remote"; url: string };
+export type DestinationInput =
+  /** A git URL; it may or may not be on a provider git-mirror can talk to. */
+  | { kind: "url"; url: string }
+  /** A filesystem path to an existing (bare) repository. */
+  | { kind: "path"; path: string }
+  /** `repo`, `owner/repo`, or `group/subgroup/repo` (GitLab), resolved against a provider. */
+  | { kind: "shorthand"; namespace?: string; repo: string };
 
-export function parseDestination(input: string, host: string): Destination {
+const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+
+export function parseDestinationInput(input: string): DestinationInput {
   const value = input.trim();
   if (!value) throw new MirrorError("Destination must not be empty.");
+  if (isRemoteUrl(value)) return { kind: "url", url: value };
+  if (isPathLike(value)) return { kind: "path", path: value };
 
-  if (isRemoteUrl(value)) {
-    const github = parseGithubUrl(value, host);
-    return github ? { kind: "github", ...github, url: value } : { kind: "remote", url: value };
-  }
-  if (isPathLike(value)) return { kind: "remote", url: value };
-
-  const slug = parseSlug(value);
-  if (!slug) {
+  const segments = value.replace(/\.git$/, "").split("/");
+  if (!segments.every((segment) => SEGMENT.test(segment))) {
     throw new MirrorError(
       `Invalid destination "${input}".`,
       "Use `repo`, `owner/repo`, or a full git URL such as git@github.com:owner/repo.git.",
     );
   }
-  return { kind: "github", ...slug };
+  const repo = segments.pop()!;
+  return segments.length > 0 ? { kind: "shorthand", namespace: segments.join("/"), repo } : { kind: "shorthand", repo };
 }

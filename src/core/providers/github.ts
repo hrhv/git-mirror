@@ -1,11 +1,14 @@
-import { MirrorError } from "./errors.js";
-import type { Runner } from "./exec.js";
-import type { Protocol } from "./remote.js";
+import { MirrorError } from "../errors.js";
+import type { Runner } from "../exec.js";
+import { githubUrl, type Protocol } from "../remote.js";
+import type { CreateRepoOptions, Provider } from "./types.js";
 
-export type Visibility = "private" | "public" | "internal";
+/** GitHub (and GitHub Enterprise Server) through the GitHub CLI, which owns authentication. */
+export class GitHubProvider implements Provider {
+  readonly name = "github" as const;
+  readonly label = "GitHub";
+  readonly nestedNamespaces = false;
 
-/** Thin wrapper over the GitHub CLI (`gh`), which owns authentication. */
-export class GitHub {
   constructor(
     private readonly run: Runner,
     readonly host: string,
@@ -15,7 +18,7 @@ export class GitHub {
     return this.run("gh", args, { env: { GH_HOST: this.host, GH_PROMPT_DISABLED: "1" } });
   }
 
-  async assertAuthenticated(): Promise<void> {
+  async assertReady(): Promise<void> {
     const result = await this.gh(["auth", "status", "--hostname", this.host]);
     if (result.code !== 0) {
       throw new MirrorError(
@@ -35,22 +38,33 @@ export class GitHub {
   }
 
   /** The protocol the user configured in gh (`gh config set git_protocol ssh`), defaulting to https. */
-  async gitProtocol(): Promise<Protocol> {
+  async defaultProtocol(): Promise<Protocol> {
     const result = await this.gh(["config", "get", "git_protocol", "--host", this.host]);
     return result.code === 0 && result.stdout.trim() === "ssh" ? "ssh" : "https";
   }
 
-  async repoExists(slug: string): Promise<boolean> {
+  async repoExists(namespace: string, repo: string): Promise<boolean> {
+    const slug = `${namespace}/${repo}`;
     const result = await this.gh(["repo", "view", slug, "--json", "name"]);
     if (result.code === 0) return true;
     if (/could not resolve to a repository|not found/i.test(result.stderr)) return false;
     throw new MirrorError(`Could not check whether ${slug} exists.`, result.stderr.trim() || undefined);
   }
 
-  async createRepo(slug: string, visibility: Visibility, description: string): Promise<void> {
+  async createRepo(namespace: string, repo: string, { visibility, description }: CreateRepoOptions): Promise<void> {
+    const slug = `${namespace}/${repo}`;
     const result = await this.gh(["repo", "create", slug, `--${visibility}`, "--description", description]);
     if (result.code !== 0) {
       throw new MirrorError(`Failed to create ${slug}.`, result.stderr.trim() || undefined);
     }
+  }
+
+  repoUrl(namespace: string, repo: string, protocol: Protocol): string {
+    return githubUrl(this.host, namespace, repo, protocol);
+  }
+
+  /** gh's credential helper (`gh auth setup-git`) or SSH keys handle git auth for GitHub. */
+  async gitAuth(): Promise<undefined> {
+    return undefined;
   }
 }

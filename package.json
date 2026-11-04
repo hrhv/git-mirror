@@ -1,7 +1,7 @@
 {
   "name": "@hrhv/git-mirror",
   "version": "0.1.0",
-  "description": "Mirror any git repository (all branches, tags and refs) into a GitHub repository, creating it if needed",
+  "description": "Mirror any git repository (all branches, tags and refs) to GitHub, GitLab, Gitea or any git remote, creating the destination if needed",
   "type": "module",
   "engines": {
     "node": ">=22.12"
@@ -33,7 +33,10 @@
     "mirror",
     "backup",
     "github",
-    "cli"
+    "cli",
+    "gitlab",
+    "gitea",
+    "forgejo"
   ],
   "author": "Harshit Budhraja",
   "license": "MIT",

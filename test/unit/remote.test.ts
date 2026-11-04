@@ -4,7 +4,8 @@ import {
   githubUrl,
   isPathLike,
   isRemoteUrl,
-  parseDestination,
+  parseDestinationInput,
+  parseHostedUrl,
   parseGithubUrl,
   parseSlug,
   redactUrl,
@@ -91,29 +92,37 @@ describe("githubUrl", () => {
   });
 });
 
-describe("parseDestination", () => {
-  it("parses GitHub shorthand", () => {
-    expect(parseDestination("backup", "github.com")).toEqual({ kind: "github", repo: "backup" });
-    expect(parseDestination("org/backup", "github.com")).toEqual({ kind: "github", owner: "org", repo: "backup" });
+describe("parseHostedUrl", () => {
+  it.each([
+    ["https://gitlab.example.com/group/sub/app.git", { host: "gitlab.example.com", origin: "https://gitlab.example.com", segments: ["group", "sub", "app"] }],
+    ["http://gitea.local:3000/me/app", { host: "gitea.local", origin: "http://gitea.local:3000", segments: ["me", "app"] }],
+    ["https://oauth2:tok@GitLab.com/g/app.git/", { host: "gitlab.com", origin: "https://gitlab.com", segments: ["g", "app"] }],
+    ["ssh://git@git.example.com:2222/team/app.git", { host: "git.example.com", origin: undefined, segments: ["team", "app"] }],
+    ["git@codeberg.org:me/app.git", { host: "codeberg.org", origin: undefined, segments: ["me", "app"] }],
+    ["myserver:repos/app.git", { host: "myserver", origin: undefined, segments: ["repos", "app"] }],
+  ])("parses %s", (url, expected) => expect(parseHostedUrl(url)).toEqual(expected));
+
+  it.each(["file:///tmp/repo.git", "/srv/repo.git", "./repo", "https://host.com/"])("returns undefined for %s", (url) =>
+    expect(parseHostedUrl(url)).toBeUndefined(),
+  );
+});
+
+describe("parseDestinationInput", () => {
+  it("parses shorthand of any depth (providers validate depth later)", () => {
+    expect(parseDestinationInput("backup")).toEqual({ kind: "shorthand", repo: "backup" });
+    expect(parseDestinationInput("org/backup.git")).toEqual({ kind: "shorthand", namespace: "org", repo: "backup" });
+    expect(parseDestinationInput("group/sub/app")).toEqual({ kind: "shorthand", namespace: "group/sub", repo: "app" });
   });
 
-  it("keeps an explicit GitHub URL but still knows the slug", () => {
-    expect(parseDestination("git@github.com:org/backup.git", "github.com")).toEqual({
-      kind: "github",
-      owner: "org",
-      repo: "backup",
-      url: "git@github.com:org/backup.git",
-    });
-  });
-
-  it("treats other URLs and paths as plain remotes", () => {
-    expect(parseDestination("https://gitlab.com/g/r.git", "github.com")).toEqual({ kind: "remote", url: "https://gitlab.com/g/r.git" });
-    expect(parseDestination("../backup.git", "github.com")).toEqual({ kind: "remote", url: "../backup.git" });
-    expect(parseDestination("myserver:repos/app.git", "github.com")).toEqual({ kind: "remote", url: "myserver:repos/app.git" });
+  it("separates URLs from paths", () => {
+    expect(parseDestinationInput("git@github.com:org/backup.git")).toEqual({ kind: "url", url: "git@github.com:org/backup.git" });
+    expect(parseDestinationInput("myserver:repos/app.git")).toEqual({ kind: "url", url: "myserver:repos/app.git" });
+    expect(parseDestinationInput("../backup.git")).toEqual({ kind: "path", path: "../backup.git" });
   });
 
   it("rejects malformed input with a hint", () => {
-    expect(() => parseDestination("a/b/c", "github.com")).toThrow(MirrorError);
-    expect(() => parseDestination("  ", "github.com")).toThrow(/must not be empty/);
+    expect(() => parseDestinationInput("-bad/repo")).toThrow(MirrorError);
+    expect(() => parseDestinationInput("has space")).toThrow(/Invalid destination/);
+    expect(() => parseDestinationInput("  ")).toThrow(/must not be empty/);
   });
 });
