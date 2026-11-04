@@ -184,4 +184,4 @@ Bump the version in `package.json`, push, and create a GitHub release. The **Pub
 
 ## License
 
-MIT
+[GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).

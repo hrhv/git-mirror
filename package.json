@@ -22,11 +22,13 @@
   },
   "scripts": {
     "build": "tsup",
+    "build:bin": "tsx scripts/build-binaries.ts",
     "dev": "tsx src/cli/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "smoke": "sh scripts/smoke-test.sh node dist/index.js"
   },
   "keywords": [
     "git",
@@ -39,7 +41,7 @@
     "forgejo"
   ],
   "author": "Harshit Budhraja",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "dependencies": {
     "commander": "^15.0.0"
   },
