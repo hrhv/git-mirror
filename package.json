@@ -1,6 +1,6 @@
 {
   "name": "@hrhv/git-mirror",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Mirror any git repository (all branches, tags and refs) to GitHub, GitLab, Gitea or any git remote, creating the destination if needed",
   "type": "module",
   "engines": {
