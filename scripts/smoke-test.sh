@@ -41,6 +41,12 @@ gm "$@" --version || fail "--version exits 0"
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' "$work/out" || fail "--version prints a version"
 pass "--version ($(cat "$work/out"))"
 
+gm "$@" -v || fail "-v exits 0"
+grep -q '^git-mirror [0-9]' "$work/out" || fail "-v starts with the version"
+grep -q '^Dependencies' "$work/out" || fail "-v lists dependencies"
+grep -Eq '[✓!✗] git ' "$work/out" || fail "-v reports git"
+pass "-v diagnostics report"
+
 gm "$@" --help || fail "--help exits 0"
 grep -q 'Usage: git-mirror' "$work/out" || fail "--help prints usage"
 pass "--help"

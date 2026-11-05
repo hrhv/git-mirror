@@ -15,6 +15,8 @@ export interface RunOptions {
    * already set) so values such as auth headers never show up in the process list.
    */
   gitConfig?: Record<string, string>;
+  /** Kill the command after this many milliseconds; it then resolves with code 124 and `timedOut: true`. */
+  timeoutMs?: number;
 }
 
 /** Appends `config` to the GIT_CONFIG_* entries already present in `env`. */
@@ -34,6 +36,7 @@ export interface RunResult {
   code: number;
   stdout: string;
   stderr: string;
+  timedOut?: boolean;
 }
 
 /** Runs an external command. Never rejects on a non-zero exit code; check `code`. */
@@ -53,6 +56,7 @@ export const spawnRunner: Runner = (command, args, options = {}) =>
     child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
 
     child.on("error", (error: NodeJS.ErrnoException) => {
+      if (timer) clearTimeout(timer);
       if (error.code === "ENOENT" && options.cwd && !existsSync(options.cwd)) {
         reject(new MirrorError(`Working directory ${options.cwd} does not exist.`));
       } else if (error.code === "ENOENT") {
@@ -61,7 +65,19 @@ export const spawnRunner: Runner = (command, args, options = {}) =>
         reject(error);
       }
     });
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    let timedOut = false;
+    const timer =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            child.kill("SIGKILL");
+          }, options.timeoutMs);
+
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      resolve(timedOut ? { code: 124, stdout, stderr, timedOut } : { code: code ?? 1, stdout, stderr });
+    });
 
     if (options.input !== undefined) {
       child.stdin?.end(options.input);

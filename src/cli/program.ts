@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { Command, CommanderError, Option } from "commander";
 import pkg from "../../package.json" with { type: "json" };
+import { collectDiagnostics, formatDiagnostics, type HostInfo } from "../core/diagnostics.js";
 import { MirrorError } from "../core/errors.js";
 import { spawnRunner, type Runner } from "../core/exec.js";
 import { createConsoleLogger, type Logger } from "../core/logger.js";
@@ -17,6 +18,8 @@ export interface CliDeps {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   fetch?: Fetch;
+  /** Machine facts for `-v` (tests inject these). */
+  host?: HostInfo;
   /** Where commander writes help/usage output. */
   writeOut?: (text: string) => void;
   writeErr?: (text: string) => void;
@@ -42,7 +45,9 @@ export function createProgram(deps: CliDeps = {}, onRun: (options: MirrorOptions
   return new Command()
     .name("git-mirror")
     .description(pkg.description)
-    .version(pkg.version, "-v, --version")
+    .version(pkg.version, "-V, --version", "output the version number")
+    // Handled in run() before parsing, so it works without <source> and <destination>.
+    .option("-v, --info", "show version, platform and dependency details (include this in bug reports)")
     .argument("<source>", "local path, git URL (https or ssh), or owner/repo on GitHub")
     .argument("<destination>", "repo, owner/repo (or group/subgroup/repo on GitLab), or any git URL or path")
     .addOption(
@@ -108,6 +113,19 @@ export function createProgram(deps: CliDeps = {}, onRun: (options: MirrorOptions
 /** Parses argv (without the node/script prefix), runs the mirror, and returns the process exit code. */
 export async function run(args: string[], deps: CliDeps = {}): Promise<number> {
   let logger = deps.logger ?? createConsoleLogger();
+
+  // `git-mirror -v` / `--info`: diagnostics only. Arguments after `--` are positional, never flags.
+  const flags = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+  if (flags.includes("-v") || flags.includes("--info")) {
+    const report = await collectDiagnostics({
+      version: pkg.version,
+      runner: deps.runner ?? spawnRunner,
+      env: deps.env ?? process.env,
+      host: deps.host,
+    });
+    (deps.writeOut ?? ((text: string) => process.stdout.write(text)))(`${formatDiagnostics(report)}\n`);
+    return 0;
+  }
 
   const program = createProgram(deps, async (options) => {
     if (!deps.logger) logger = createConsoleLogger({ quiet: options.quiet });

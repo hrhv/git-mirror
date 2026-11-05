@@ -85,9 +85,28 @@ describe("cli", () => {
     expect(t.err()).toContain("Allowed choices are private, public, internal");
   });
 
-  it("prints the version", async () => {
-    const t = cli(["--version"]);
-    expect(await t.exitCode).toBe(0);
-    expect(t.out().trim()).toBe(pkg.version);
+  it("prints just the version for --version and -V (scripts and install.sh rely on this)", async () => {
+    for (const flag of ["--version", "-V"]) {
+      const t = cli([flag]);
+      expect(await t.exitCode).toBe(0);
+      expect(t.out().trim()).toBe(pkg.version);
+    }
+  });
+
+  it("prints the diagnostics report for -v and --info, without needing source and destination", async () => {
+    for (const flag of ["-v", "--info"]) {
+      const t = cli([flag]);
+      expect(await t.exitCode).toBe(0);
+      expect(t.out()).toContain(`git-mirror ${pkg.version}`);
+      expect(t.out()).toMatch(/Dependencies\n/);
+      expect(t.fake.commands("git")).toContain("--version");
+      expect(t.fake.commands("git").some((c) => c.startsWith("push") || c.startsWith("clone"))).toBe(false);
+    }
+  });
+
+  it("treats -v after -- as a positional argument, not the diagnostics flag", async () => {
+    const t = cli(["https://gitlab.com/g/app.git", "--", "-v"]);
+    expect(await t.exitCode).toBe(1);
+    expect(t.out()).not.toContain("Dependencies");
   });
 });

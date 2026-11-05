@@ -38,6 +38,12 @@ The installer:
 3. Runs it once to make sure it works on this machine, then installs it to `~/.local/bin`, or to `/usr/local/bin` when run as root.
 4. Adds that directory to your `PATH` in your shell profile (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), unless it's already on your `PATH`.
 
+Every step is announced before it runs, and the download shows a progress bar. Each transfer has timeouts and gives up if it stalls, so the installer can't hang silently. To see everything it does (each URL with its HTTP status, size and duration, the checksums, and the time spent on every step), run it with `--verbose`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh -s -- --verbose
+```
+
 Running it again upgrades to the latest version. You can customise it with environment variables:
 
 | Variable | Effect |
@@ -45,6 +51,7 @@ Running it again upgrades to the latest version. You can customise it with envir
 | `GIT_MIRROR_VERSION=v0.2.0` | Install a specific release instead of the latest (the leading `v` is optional) |
 | `GIT_MIRROR_INSTALL_DIR=/opt/bin` | Install somewhere else |
 | `GIT_MIRROR_NO_MODIFY_PATH=1` | Don't edit any shell profile |
+| `GIT_MIRROR_VERBOSE=1` | Same as `--verbose` (below) |
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | GIT_MIRROR_VERSION=v0.2.0 sh
@@ -206,7 +213,8 @@ git-mirror . my-backup --dry-run
 | `-n, --dry-run`             | Show what would happen without creating or pushing anything                        |
 | `--keep-host-refs`          | Also push host-generated refs (`refs/pull/*`, `refs/merge-requests/*`, ...). Most hosts reject these |
 | `-q, --quiet`               | Only print warnings and errors                                                     |
-| `-v, --version`             | Print the version                                                                  |
+| `-v, --info`                | Show version, install, platform, dependency and configuration details (see [Troubleshooting](#troubleshooting)) |
+| `-V, --version`             | Print just the version number                                                      |
 
 ## How it works
 
@@ -224,6 +232,50 @@ Re-running the same command with `--force` brings an existing mirror up to date.
 
 - Git LFS objects are not copied. Run `git lfs fetch --all` and `git lfs push --all` separately if the source uses LFS.
 - Only git data is mirrored. Issues, pull requests, wikis and releases are not.
+
+## Troubleshooting
+
+`git-mirror -v` prints everything needed to debug a problem, and nothing secret:
+
+```
+git-mirror 0.1.0-alpha.1
+
+git-mirror
+    install              standalone binary
+    runtime              Bun 1.3.14
+    executable           ~/.local/bin/git-mirror
+  ✓ on PATH              ~/.local/bin/git-mirror
+
+System
+    os                   macOS 26.4 (25E246), Darwin 25.4.0
+    arch                 arm64
+    ...
+
+Dependencies
+  ✓ git                  2.50.1 (Apple Git-155)  /usr/bin/git
+      credential helper  osxkeychain
+  ✓ gh                   2.79.0 (2025-09-08)  /opt/homebrew/bin/gh
+  ✓   auth               logged in to github.com as jane
+      git_protocol       ssh
+  ✓ ssh                  OpenSSH_10.2p1, LibreSSL 3.3.6
+
+Configuration
+    GH_HOST              not set
+    GITLAB_TOKEN         set
+    ...
+
+No problems found.
+```
+
+It shows:
+
+- **git-mirror:** how it was installed and where, plus every `git-mirror` on your `PATH`, which catches an old copy shadowing a new one.
+- **System:** the OS and version (the Linux distro, or the macOS version and build), CPU and Rosetta, libc (glibc version or musl), shell, terminal and temp directory.
+- **Dependencies:** git (version, path, credential helper), gh (version, login status for `$GH_HOST`, `git_protocol`) and ssh.
+- **Configuration:** the host variables, whether each token variable is set (never its value), proxy settings with any credentials masked, and git overrides such as `GIT_SSH_COMMAND`.
+- **Problems:** a summary of anything that needs fixing.
+
+Paths under your home directory are shortened to `~`, and every check has a time limit, so the command always finishes quickly. When reporting a bug, include this output. For installer problems, include the output of the installer's `--verbose` mode too.
 
 ## Development
 
