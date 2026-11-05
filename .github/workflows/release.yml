@@ -4,6 +4,12 @@
 # Release assets (what install.sh downloads):
 #   git-mirror-{linux-x64,linux-arm64,linux-x64-musl,linux-arm64-musl,darwin-x64,darwin-arm64}.gz
 #   SHA256SUMS, install.sh, uninstall.sh
+#
+# Two versions of the repository are involved when an older tag is rebuilt with workflow_dispatch:
+#   - the app (src/, package.json, lockfile) comes from the release tag, so the binaries are exactly what was tagged;
+#   - the release tooling (scripts/, install.sh, uninstall.sh) comes from this workflow's own commit, so pipeline
+#     fixes apply to every rebuild instead of silently using the copies frozen into the tag.
+# For a normal release event both are the same commit.
 
 name: Release binaries
 
@@ -38,10 +44,23 @@ jobs:
           - { platform: linux-arm64-musl, runner: ubuntu-24.04-arm, alpine: true }
           - { platform: darwin-x64, runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-latest }
+    env:
+      TOOLING: .release-tooling
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out the release source
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.RELEASE_TAG || github.ref }}
+
+      - name: Check out the release tooling (this workflow's commit)
+        uses: actions/checkout@v7
+        with:
+          path: ${{ env.TOOLING }}
+
+      - name: Show which commits are used
+        run: |
+          echo "app source:      $(git rev-parse HEAD) (${RELEASE_TAG:-$GITHUB_REF_NAME})"
+          echo "release tooling: $(git -C "$TOOLING" rev-parse HEAD)"
 
       - uses: actions/setup-node@v7
         with:
@@ -65,17 +84,17 @@ jobs:
       - run: npm ci
 
       - name: Build binary
-        run: npx tsx scripts/build-binaries.ts ${{ matrix.platform }} --gzip
+        run: npx tsx "$TOOLING/scripts/build-binaries.ts" ${{ matrix.platform }} --gzip
 
       - name: Smoke test (native)
         if: ${{ !matrix.alpine }}
-        run: sh scripts/smoke-test.sh dist/bin/git-mirror-${{ matrix.platform }}
+        run: sh "$TOOLING/scripts/smoke-test.sh" dist/bin/git-mirror-${{ matrix.platform }}
 
       - name: Smoke test (Alpine, musl)
         if: ${{ matrix.alpine }}
         run: |
           docker run --rm -v "$PWD:/w" -w /w alpine:3.22 sh -c \
-            "apk add --no-cache git libstdc++ libgcc >/dev/null && sh scripts/smoke-test.sh dist/bin/git-mirror-${{ matrix.platform }}"
+            "apk add --no-cache git libstdc++ libgcc >/dev/null && sh $TOOLING/scripts/smoke-test.sh dist/bin/git-mirror-${{ matrix.platform }}"
 
       - name: Verify macOS code signature
         if: startsWith(matrix.platform, 'darwin-')
@@ -95,9 +114,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      # install.sh and uninstall.sh are release tooling: take them from this workflow's commit (see top).
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/download-artifact@v8
         with:
