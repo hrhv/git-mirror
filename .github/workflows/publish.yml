@@ -22,7 +22,9 @@ jobs:
           registry-url: https://npm.pkg.github.com/
           scope: "@hrhv"
       - run: npm ci
-      # prepublishOnly runs typecheck, tests and the build.
-      - run: npm publish
+      # prepublishOnly runs typecheck, tests and the build. Pre-releases go to the "next" dist-tag so
+      # `npm install @hrhv/git-mirror` keeps resolving to the latest stable version.
+      - run: npm publish --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}

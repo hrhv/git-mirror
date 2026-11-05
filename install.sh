@@ -6,7 +6,8 @@
 #   wget -qO- https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh
 #
 # Options (environment variables):
-#   GIT_MIRROR_VERSION=v0.2.0       install a specific release (default: latest)
+#   GIT_MIRROR_VERSION=v0.2.0       install a specific release, with or without the "v" (default: the latest
+#                                   release, or the newest pre-release while there is no stable release yet)
 #   GIT_MIRROR_INSTALL_DIR=/opt/bin install somewhere else (default: /usr/local/bin as root, else ~/.local/bin)
 #   GIT_MIRROR_NO_MODIFY_PATH=1     never edit shell profiles
 #   GIT_MIRROR_DOWNLOAD_URL=...     base URL that holds the release assets (mirrors, testing)
@@ -108,18 +109,45 @@ sha256_of() {
   fi
 }
 
-release_base_url() {
+# Tag of the newest release including pre-releases (GitHub's releases/latest skips pre-releases).
+newest_release_tag() {
+  download "https://api.github.com/repos/$REPO/releases?per_page=1" "$tmp/releases.json" 2>/dev/null || return 1
+  sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' "$tmp/releases.json" | head -n 1
+}
+
+# Downloads the asset, trying each place it may live. Sets base_url to the one that worked.
+fetch_asset() {
   if [ -n "${GIT_MIRROR_DOWNLOAD_URL:-}" ]; then
-    echo "${GIT_MIRROR_DOWNLOAD_URL%/}"
-    return
+    base_url="${GIT_MIRROR_DOWNLOAD_URL%/}"
+    download "$base_url/$asset" "$tmp/$asset" && return 0
+    die "Could not download $base_url/$asset."
   fi
+
+  releases="https://github.com/$REPO/releases"
   version=${GIT_MIRROR_VERSION:-latest}
-  if [ "$version" = latest ]; then
-    echo "https://github.com/$REPO/releases/latest/download"
-  else
-    case "$version" in v*) ;; *) version="v$version" ;; esac
-    echo "https://github.com/$REPO/releases/download/$version"
+  if [ "$version" != latest ]; then
+    # Accept the tag with or without its leading "v": try it as given, then the other form.
+    case "$version" in v*) other=${version#v} ;; *) other="v$version" ;; esac
+    for tag in "$version" "$other"; do
+      base_url="$releases/download/$tag"
+      download "$base_url/$asset" "$tmp/$asset" 2>/dev/null && return 0
+    done
+    die "Could not download $asset for release $version. Check that the release exists and has a $platform build: $releases"
   fi
+
+  base_url="$releases/latest/download"
+  download "$base_url/$asset" "$tmp/$asset" 2>/dev/null && return 0
+
+  # No stable release yet (or it has no assets): fall back to the newest pre-release.
+  tag=$(newest_release_tag) || tag=""
+  if [ -n "$tag" ]; then
+    base_url="$releases/download/$tag"
+    if download "$base_url/$asset" "$tmp/$asset" 2>/dev/null; then
+      info "No stable release yet; installing pre-release $tag"
+      return 0
+    fi
+  fi
+  die "Could not download $asset from the latest release. Check that a release with a $platform build exists: $releases"
 }
 
 default_install_dir() {
@@ -161,7 +189,6 @@ add_to_path() {
 main() {
   platform=$(detect_platform)
   asset="$BIN_NAME-$platform.gz"
-  base_url=$(release_base_url)
   install_dir=$(default_install_dir)
 
   info "Installing $BIN_NAME for $platform"
@@ -170,8 +197,7 @@ main() {
   tmp=$(mktemp -d 2>/dev/null || mktemp -d -t git-mirror)
   trap 'rm -rf "$tmp"' EXIT INT TERM
 
-  download "$base_url/$asset" "$tmp/$asset" ||
-    die "Could not download $base_url/$asset. Check GIT_MIRROR_VERSION, or that a release exists for $platform."
+  fetch_asset
 
   if download "$base_url/SHA256SUMS" "$tmp/SHA256SUMS"; then
     expected=$(grep " \*\{0,1\}$asset\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)

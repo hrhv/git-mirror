@@ -34,7 +34,7 @@ wget -qO- https://raw.githubusercontent.com/hrhv/git-mirror/main/install.sh | sh
 The installer:
 
 1. Picks the build for your machine: Linux (glibc or musl/Alpine, x64 or arm64), or macOS (Intel or Apple Silicon).
-2. Downloads it from the [latest release](https://github.com/hrhv/git-mirror/releases/latest) and verifies it against `SHA256SUMS`.
+2. Downloads it from the [latest release](https://github.com/hrhv/git-mirror/releases/latest), or the newest pre-release if there's no stable release yet, and verifies it against `SHA256SUMS`.
 3. Runs it once to make sure it works on this machine, then installs it to `~/.local/bin`, or to `/usr/local/bin` when run as root.
 4. Adds that directory to your `PATH` in your shell profile (`~/.zshrc`, `~/.bashrc`, `~/.bash_profile` on macOS, fish's `conf.d`, or `~/.profile`), unless it's already on your `PATH`.
 
@@ -42,7 +42,7 @@ Running it again upgrades to the latest version. You can customise it with envir
 
 | Variable | Effect |
 | -------- | ------ |
-| `GIT_MIRROR_VERSION=v0.2.0` | Install a specific release instead of the latest |
+| `GIT_MIRROR_VERSION=v0.2.0` | Install a specific release instead of the latest (the leading `v` is optional) |
 | `GIT_MIRROR_INSTALL_DIR=/opt/bin` | Install somewhere else |
 | `GIT_MIRROR_NO_MODIFY_PATH=1` | Don't edit any shell profile |
 
@@ -246,11 +246,11 @@ The integration tests run the real `git` binary against throwaway repositories i
 ### Releasing
 
 1. Bump the version in `package.json`, and push.
-2. Create a GitHub release whose tag matches the version (`v0.2.0` for `0.2.0`).
+2. Create a GitHub release whose tag matches the version, with or without a leading `v` (`0.2.0` or `v0.2.0` for version `0.2.0`). Tick **Set as a pre-release** for versions like `0.2.0-alpha.1`.
 
 Two workflows then run:
 
-- **Publish** publishes the npm package to GitHub Packages.
+- **Publish** publishes the npm package to GitHub Packages. Pre-releases go to the `next` dist-tag, so `npm install @hrhv/git-mirror` keeps getting the latest stable version.
 - **Release binaries** builds the six binaries, each on its own OS and CPU (using Alpine containers for musl), and smoke-tests every one natively. Only if they all pass does it attach them to the release, along with `SHA256SUMS`, `install.sh` and `uninstall.sh`. A tag that doesn't match `package.json` fails the run.
 
 To attach binaries to an existing release, run **Release binaries** manually with that tag.
