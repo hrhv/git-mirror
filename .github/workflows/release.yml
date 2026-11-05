@@ -79,7 +79,7 @@ jobs:
 
       - name: Verify macOS code signature
         if: startsWith(matrix.platform, 'darwin-')
-        run: codesign --verify --verbose dist/bin/git-mirror-${{ matrix.platform }}
+        run: codesign --verify --strict --verbose dist/bin/git-mirror-${{ matrix.platform }}
 
       - uses: actions/upload-artifact@v7
         with:

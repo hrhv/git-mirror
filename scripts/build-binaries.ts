@@ -38,6 +38,23 @@ function hostPlatform(): PlatformName {
   return `linux-${cpu}${musl ? "-musl" : ""}`;
 }
 
+/**
+ * Bun appends the bundled app to a runtime that was already signed, so the signature it ships with no longer
+ * matches ("invalid signature (code or signature have been modified)"). Re-sign ad hoc so the binary passes
+ * `codesign --verify`; Apple Silicon only runs code with a valid signature.
+ */
+function signMacBinary(path: string): void {
+  if (platform() !== "darwin") {
+    console.warn(`  ! ${path} is not re-signed (codesign needs macOS); its signature is invalid until it is.`);
+    return;
+  }
+  for (const args of [["--force", "--sign", "-", path], ["--verify", "--strict", path]]) {
+    const result = spawnSync("codesign", args, { stdio: "inherit" });
+    if (result.status !== 0) throw new Error(`codesign ${args.join(" ")} failed`);
+  }
+  console.log(`  ✓ signed (ad hoc) and verified`);
+}
+
 async function gzipFile(path: string): Promise<void> {
   await pipeline(createReadStream(path), createGzip({ level: 9 }), createWriteStream(`${path}.gz`));
 }
@@ -70,6 +87,7 @@ async function main(): Promise<void> {
     if (result.status !== 0) process.exit(result.status ?? 1);
     // Bun writes a source map next to the binary even with --sourcemap=none; it is not needed.
     rmSync(join(OUT_DIR, "index.js.map"), { force: true });
+    if (name.startsWith("darwin-")) signMacBinary(outfile);
     if (gzip) await gzipFile(outfile);
   }
 }
